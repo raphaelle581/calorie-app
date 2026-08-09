@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useCallback } from "react";
-import { Plus, Trash2, Receipt, Settings2, Flame } from "lucide-react";
+import { Plus, Trash2, Receipt, Settings2, Flame, LogOut, Loader2 } from "lucide-react";
+import { supabase } from "../lib/supabase";
+import Auth from "./Auth";
 
 const ACTIVITY = [
   { id: "sedentary", label: "Peu ou pas de sport", mult: 1.2 },
@@ -47,6 +49,7 @@ function Perforation() {
 }
 
 export default function CalorieTracker() {
+  const [session, setSession] = useState(undefined); // undefined = chargement, null = pas connecté
   const [step, setStep] = useState("loading");
   const [profile, setProfile] = useState({
     sex: "femme",
@@ -61,33 +64,53 @@ export default function CalorieTracker() {
   const [now] = useState(() => new Date());
   const todayKey = dateKey(now);
 
+  // Suivi de la session de connexion
   useEffect(() => {
-    try {
-      const savedProfile = localStorage.getItem("profile");
-      const savedFoods = localStorage.getItem(`log:${todayKey}`);
-      if (savedProfile) setProfile(JSON.parse(savedProfile));
-      if (savedFoods) setFoods(JSON.parse(savedFoods));
-      setStep(savedProfile ? "tracking" : "setup");
-    } catch (e) {
-      setStep("setup");
-    }
-  }, [todayKey]);
+    supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  // Chargement du profil + journal du jour depuis Supabase une fois connecté
+  useEffect(() => {
+    if (!session) return;
+    (async () => {
+      setStep("loading");
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", session.user.id)
+        .maybeSingle();
+
+      const { data: logsData } = await supabase
+        .from("logs")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .eq("log_date", todayKey)
+        .order("created_at", { ascending: true });
+
+      if (profileData) setProfile(profileData);
+      setFoods(
+        (logsData || []).map((l) => ({ id: l.id, name: l.name, kcal: l.kcal, qty: l.qty }))
+      );
+      setStep(profileData ? "tracking" : "setup");
+    })();
+  }, [session, todayKey]);
 
   const result = useMemo(() => computeTarget(profile), [profile]);
 
-  const persistFoods = useCallback(
-    (list) => {
-      try {
-        localStorage.setItem(`log:${todayKey}`, JSON.stringify(list));
-      } catch (e) {}
-    },
-    [todayKey]
-  );
-
-  function saveProfileAndContinue() {
-    try {
-      localStorage.setItem("profile", JSON.stringify(profile));
-    } catch (e) {}
+  async function saveProfileAndContinue() {
+    await supabase.from("profiles").upsert({
+      id: session.user.id,
+      sex: profile.sex,
+      weight: profile.weight,
+      height: profile.height,
+      age: profile.age,
+      activity: profile.activity,
+      goal: profile.goal,
+    });
     setStep("tracking");
   }
 
@@ -95,25 +118,53 @@ export default function CalorieTracker() {
   const target = result?.target ?? 0;
   const remaining = target - totalEaten;
 
-  function addFood(e) {
+  async function addFood(e) {
     e.preventDefault();
     const kcal = parseFloat(draft.kcal);
     const qty = parseFloat(draft.qty) || 1;
     if (!draft.name.trim() || !kcal || kcal <= 0) return;
-    const updated = [...foods, { id: Date.now(), name: draft.name.trim(), kcal, qty }];
-    setFoods(updated);
-    persistFoods(updated);
-    setDraft({ name: "", kcal: "", qty: "1" });
+
+    const { data, error } = await supabase
+      .from("logs")
+      .insert({
+        user_id: session.user.id,
+        log_date: todayKey,
+        name: draft.name.trim(),
+        kcal,
+        qty,
+      })
+      .select()
+      .single();
+
+    if (!error && data) {
+      setFoods((f) => [...f, { id: data.id, name: data.name, kcal: data.kcal, qty: data.qty }]);
+      setDraft({ name: "", kcal: "", qty: "1" });
+    }
   }
 
-  function removeFood(id) {
-    const updated = foods.filter((x) => x.id !== id);
-    setFoods(updated);
-    persistFoods(updated);
+  async function removeFood(id) {
+    setFoods((f) => f.filter((x) => x.id !== id));
+    await supabase.from("logs").delete().eq("id", id);
+  }
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
   }
 
   const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
   const timeLabel = now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+
+  if (session === undefined) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center" style={{ background: "#DCE2D2" }}>
+        <Loader2 size={20} className="animate-spin" style={{ color: "#5C6659" }} />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <Auth />;
+  }
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center p-4 sm:p-8" style={{ background: "#DCE2D2" }}>
@@ -122,7 +173,7 @@ export default function CalorieTracker() {
           <div className="text-center py-20 text-sm" style={{ color: "#5C6659" }}>Chargement…</div>
         )}
         {step === "setup" && (
-          <SetupCard profile={profile} setProfile={setProfile} onSubmit={saveProfileAndContinue} result={result} />
+          <SetupCard profile={profile} setProfile={setProfile} onSubmit={saveProfileAndContinue} result={result} onSignOut={handleSignOut} />
         )}
         {step === "tracking" && (
           <ReceiptCard
@@ -137,6 +188,7 @@ export default function CalorieTracker() {
             dateLabel={dateLabel}
             timeLabel={timeLabel}
             onEditProfile={() => setStep("setup")}
+            onSignOut={handleSignOut}
           />
         )}
       </div>
@@ -144,15 +196,20 @@ export default function CalorieTracker() {
   );
 }
 
-function SetupCard({ profile, setProfile, onSubmit, result }) {
+function SetupCard({ profile, setProfile, onSubmit, result, onSignOut }) {
   const set = (k) => (e) => setProfile((p) => ({ ...p, [k]: e.target.value }));
   const valid = profile.weight && profile.height && profile.age;
 
   return (
     <div className="rounded-[2px] p-8 sm:p-10" style={{ background: "#F6F4EC", boxShadow: "0 20px 50px -20px rgba(36,50,42,0.35)" }}>
-      <div className="flex items-center gap-2 mb-1" style={{ color: "#C99A3E" }}>
-        <Flame size={18} strokeWidth={2.5} />
-        <span className="font-mono-num text-xs tracking-[0.2em] uppercase">Budget du jour</span>
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-2" style={{ color: "#C99A3E" }}>
+          <Flame size={18} strokeWidth={2.5} />
+          <span className="font-mono-num text-xs tracking-[0.2em] uppercase">Budget du jour</span>
+        </div>
+        <button onClick={onSignOut} className="opacity-60 hover:opacity-100 transition-opacity" style={{ color: "#5C6659" }} aria-label="Se déconnecter">
+          <LogOut size={15} />
+        </button>
       </div>
       <h1 className="font-display text-3xl mb-6" style={{ color: "#24322A" }}>Combien te faut-il&nbsp;?</h1>
 
@@ -242,7 +299,7 @@ function Field({ label, children }) {
   );
 }
 
-function ReceiptCard({ result, foods, draft, setDraft, addFood, removeFood, totalEaten, remaining, dateLabel, timeLabel, onEditProfile }) {
+function ReceiptCard({ result, foods, draft, setDraft, addFood, removeFood, totalEaten, remaining, dateLabel, timeLabel, onEditProfile, onSignOut }) {
   const target = result?.target ?? 0;
   const over = remaining < 0;
   const pct = target ? Math.min(100, Math.round((totalEaten / target) * 100)) : 0;
@@ -255,9 +312,14 @@ function ReceiptCard({ result, foods, draft, setDraft, addFood, removeFood, tota
             <Receipt size={16} strokeWidth={2.5} />
             <span className="font-mono-num text-[11px] tracking-[0.2em] uppercase">Ticket du jour</span>
           </div>
-          <button onClick={onEditProfile} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Modifier mon profil">
-            <Settings2 size={16} />
-          </button>
+          <div className="flex items-center gap-3">
+            <button onClick={onEditProfile} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Modifier mon profil">
+              <Settings2 size={16} />
+            </button>
+            <button onClick={onSignOut} className="opacity-70 hover:opacity-100 transition-opacity" aria-label="Se déconnecter">
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
         <p className="font-display text-2xl mt-2 capitalize">{dateLabel}</p>
         <p className="font-mono-num text-xs opacity-60 mt-0.5">{timeLabel}</p>
@@ -353,4 +415,3 @@ function ReceiptCard({ result, foods, draft, setDraft, addFood, removeFood, tota
     </div>
   );
 }
-
