@@ -1,0 +1,10 @@
+{
+  "name": "Mon Budget Calorique",
+  "short_name": "Calories",
+  "description": "Suis ton apport calorique quotidien simplement.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#DCE2D2",
+  "theme_color": "#24322A",
+  "icons": []
+}
