@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useCallback } from "react";
-import { Plus, Trash2, Receipt, Settings2, Flame, LogOut, Loader2 } from "lucide-react";
+import { Plus, Trash2, Receipt, Settings2, Flame, LogOut, Loader2, Search, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import Auth from "./Auth";
 
@@ -38,6 +38,25 @@ function computeTarget({ sex, weight, height, age, activity, goal }) {
   return { bmr: Math.round(bmr), tdee: Math.round(tdee), target: capped, wasCapped: capped !== target };
 }
 
+// Recherche dans la base alimentaire gratuite Open Food Facts
+async function searchOpenFoodFacts(query) {
+  const url = `https://world.openfoodfacts.org/api/v2/search?search_terms=${encodeURIComponent(
+    query
+  )}&fields=product_name,brands,nutriments&page_size=8&json=1`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("api_error");
+  const data = await response.json();
+  const products = (data.products || [])
+    .filter((p) => p.product_name && p.nutriments && p.nutriments["energy-kcal_100g"])
+    .map((p, i) => ({
+      id: `${i}-${p.product_name}`,
+      name: p.product_name,
+      brand: p.brands ? p.brands.split(",")[0].trim() : "",
+      kcalPer100g: Math.round(p.nutriments["energy-kcal_100g"]),
+    }));
+  return products;
+}
+
 function Perforation() {
   return (
     <div className="flex justify-between px-1" aria-hidden="true">
@@ -49,7 +68,7 @@ function Perforation() {
 }
 
 export default function CalorieTracker() {
-  const [session, setSession] = useState(undefined); // undefined = chargement, null = pas connecté
+  const [session, setSession] = useState(undefined);
   const [step, setStep] = useState("loading");
   const [profile, setProfile] = useState({
     sex: "femme",
@@ -60,11 +79,9 @@ export default function CalorieTracker() {
     goal: "maintain",
   });
   const [foods, setFoods] = useState([]);
-  const [draft, setDraft] = useState({ name: "", kcal: "", qty: "1" });
   const [now] = useState(() => new Date());
   const todayKey = dateKey(now);
 
-  // Suivi de la session de connexion
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -73,7 +90,6 @@ export default function CalorieTracker() {
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  // Chargement du profil + journal du jour depuis Supabase une fois connecté
   useEffect(() => {
     if (!session) return;
     (async () => {
@@ -118,27 +134,21 @@ export default function CalorieTracker() {
   const target = result?.target ?? 0;
   const remaining = target - totalEaten;
 
-  async function addFood(e) {
-    e.preventDefault();
-    const kcal = parseFloat(draft.kcal);
-    const qty = parseFloat(draft.qty) || 1;
-    if (!draft.name.trim() || !kcal || kcal <= 0) return;
-
+  async function addFood(name, kcal) {
     const { data, error } = await supabase
       .from("logs")
       .insert({
         user_id: session.user.id,
         log_date: todayKey,
-        name: draft.name.trim(),
+        name,
         kcal,
-        qty,
+        qty: 1,
       })
       .select()
       .single();
 
     if (!error && data) {
       setFoods((f) => [...f, { id: data.id, name: data.name, kcal: data.kcal, qty: data.qty }]);
-      setDraft({ name: "", kcal: "", qty: "1" });
     }
   }
 
@@ -179,8 +189,6 @@ export default function CalorieTracker() {
           <ReceiptCard
             result={result}
             foods={foods}
-            draft={draft}
-            setDraft={setDraft}
             addFood={addFood}
             removeFood={removeFood}
             totalEaten={totalEaten}
@@ -299,7 +307,7 @@ function Field({ label, children }) {
   );
 }
 
-function ReceiptCard({ result, foods, draft, setDraft, addFood, removeFood, totalEaten, remaining, dateLabel, timeLabel, onEditProfile, onSignOut }) {
+function ReceiptCard({ result, foods, addFood, removeFood, totalEaten, remaining, dateLabel, timeLabel, onEditProfile, onSignOut }) {
   const target = result?.target ?? 0;
   const over = remaining < 0;
   const pct = target ? Math.min(100, Math.round((totalEaten / target) * 100)) : 0;
@@ -347,20 +355,17 @@ function ReceiptCard({ result, foods, draft, setDraft, addFood, removeFood, tota
         </div>
       </div>
 
-      <div className="px-7 py-4 max-h-64 overflow-y-auto">
+      <div className="px-7 py-4 max-h-56 overflow-y-auto">
         {foods.length === 0 ? (
           <p className="text-sm text-center py-6" style={{ color: "#9B9682" }}>
-            Rien noté pour l'instant — ajoute ton premier aliment ci-dessous.
+            Rien noté pour l'instant — cherche ton premier aliment ci-dessous.
           </p>
         ) : (
           <ul className="space-y-2.5">
             {foods.map((f) => (
               <li key={f.id} className="flex items-center justify-between group">
-                <div className="font-mono-num text-sm" style={{ color: "#24322A" }}>
-                  <span>{f.name}</span>
-                  {f.qty !== 1 && <span style={{ color: "#8A8672" }}> ×{f.qty}</span>}
-                </div>
-                <div className="flex items-center gap-3">
+                <span className="font-mono-num text-sm pr-2" style={{ color: "#24322A" }}>{f.name}</span>
+                <div className="flex items-center gap-3 shrink-0">
                   <span className="font-mono-num text-sm" style={{ color: "#5C6659" }}>{Math.round(f.kcal * f.qty)} kcal</span>
                   <button onClick={() => removeFood(f.id)} className="opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: "#B0532E" }} aria-label={`Supprimer ${f.name}`}>
                     <Trash2 size={14} />
@@ -376,42 +381,143 @@ function ReceiptCard({ result, foods, draft, setDraft, addFood, removeFood, tota
         <Perforation />
       </div>
 
-      <form onSubmit={addFood} className="px-7 py-5 space-y-2.5">
-        <p className="text-[11px] uppercase tracking-wide mb-1" style={{ color: "#8A8672" }}>Ajouter un aliment</p>
-        <input
-          type="text"
-          placeholder="Ex. Yaourt nature"
-          value={draft.name}
-          onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-          className="w-full input-food"
-        />
+      <FoodSearchForm addFood={addFood} />
+    </div>
+  );
+}
+
+function FoodSearchForm({ addFood }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [selected, setSelected] = useState(null);
+  const [grams, setGrams] = useState("100");
+  const [adding, setAdding] = useState(false);
+
+  async function handleSearch(e) {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setSearching(true);
+    setSearchError("");
+    setResults([]);
+    setSelected(null);
+    try {
+      const products = await searchOpenFoodFacts(query.trim());
+      if (products.length === 0) {
+        setSearchError("Aucun résultat trouvé, essaie un autre nom.");
+      }
+      setResults(products);
+    } catch (err) {
+      setSearchError("La recherche a échoué, réessaie dans un instant.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function handleAdd() {
+    const g = parseFloat(grams);
+    if (!selected || !g || g <= 0) return;
+    setAdding(true);
+    const totalKcal = Math.round((selected.kcalPer100g * g) / 100);
+    const label = `${selected.name}${selected.brand ? " — " + selected.brand : ""} (${g} g)`;
+    await addFood(label, totalKcal);
+    setAdding(false);
+    setSelected(null);
+    setResults([]);
+    setQuery("");
+    setGrams("100");
+  }
+
+  if (selected) {
+    return (
+      <div className="px-7 py-5 space-y-2.5">
+        <p className="text-[11px] uppercase tracking-wide mb-1" style={{ color: "#8A8672" }}>Aliment choisi</p>
+        <div className="flex items-start justify-between gap-2 p-3 rounded-[2px]" style={{ background: "#EFEBDD" }}>
+          <div>
+            <p className="text-sm font-medium" style={{ color: "#24322A" }}>{selected.name}</p>
+            {selected.brand && <p className="text-xs" style={{ color: "#8A8672" }}>{selected.brand}</p>}
+            <p className="font-mono-num text-xs mt-1" style={{ color: "#5C6659" }}>{selected.kcalPer100g} kcal / 100g</p>
+          </div>
+          <button onClick={() => setSelected(null)} style={{ color: "#5C6659" }} aria-label="Changer d'aliment">
+            <X size={16} />
+          </button>
+        </div>
         <div className="flex gap-2">
           <input
             type="number"
-            placeholder="Kcal"
             min="1"
-            value={draft.kcal}
-            onChange={(e) => setDraft((d) => ({ ...d, kcal: e.target.value }))}
-            className="w-24 input-food"
+            placeholder="Grammes"
+            value={grams}
+            onChange={(e) => setGrams(e.target.value)}
+            className="w-28 input-food"
           />
-          <input
-            type="number"
-            placeholder="Qté"
-            min="0.5"
-            step="0.5"
-            value={draft.qty}
-            onChange={(e) => setDraft((d) => ({ ...d, qty: e.target.value }))}
-            className="w-20 input-food"
-          />
+          <span className="flex items-center text-sm" style={{ color: "#8A8672" }}>g</span>
           <button
-            type="submit"
-            className="flex-1 flex items-center justify-center gap-1.5 rounded-[2px] text-sm font-medium transition-opacity hover:opacity-90"
+            onClick={handleAdd}
+            disabled={adding}
+            className="flex-1 flex items-center justify-center gap-1.5 rounded-[2px] text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
             style={{ background: "#3F5B48", color: "#F6F4EC" }}
           >
-            <Plus size={15} /> Ajouter
+            {adding ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+            Ajouter
           </button>
         </div>
+        {grams && parseFloat(grams) > 0 && (
+          <p className="font-mono-num text-xs" style={{ color: "#8A8672" }}>
+            ≈ {Math.round((selected.kcalPer100g * parseFloat(grams)) / 100)} kcal au total
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-7 py-5 space-y-2.5">
+      <p className="text-[11px] uppercase tracking-wide mb-1" style={{ color: "#8A8672" }}>Chercher un aliment</p>
+      <form onSubmit={handleSearch} className="flex gap-2">
+        <input
+          type="text"
+          placeholder="Ex. yaourt nature, pomme, riz..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          className="flex-1 input-food"
+        />
+        <button
+          type="submit"
+          disabled={searching || !query.trim()}
+          className="px-4 flex items-center justify-center rounded-[2px] text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
+          style={{ background: "#3F5B48", color: "#F6F4EC" }}
+        >
+          {searching ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
+        </button>
       </form>
+
+      {searchError && <p className="text-xs" style={{ color: "#B0532E" }}>{searchError}</p>}
+
+      {results.length > 0 && (
+        <ul className="space-y-1.5 max-h-52 overflow-y-auto mt-2">
+          {results.map((p) => (
+            <li key={p.id}>
+              <button
+                onClick={() => setSelected(p)}
+                className="w-full text-left px-3 py-2 rounded-[2px] transition-colors"
+                style={{ background: "#FCFBF6", border: "1px solid #E3E0D2" }}
+              >
+                <p className="text-sm" style={{ color: "#24322A" }}>{p.name}</p>
+                <div className="flex justify-between items-baseline mt-0.5">
+                  {p.brand && <span className="text-xs" style={{ color: "#8A8672" }}>{p.brand}</span>}
+                  <span className="font-mono-num text-xs" style={{ color: "#5C6659" }}>{p.kcalPer100g} kcal/100g</span>
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="text-[11px]" style={{ color: "#9B9682" }}>
+        Recherche dans Open Food Facts, une base alimentaire libre et gratuite.
+      </p>
     </div>
   );
 }
