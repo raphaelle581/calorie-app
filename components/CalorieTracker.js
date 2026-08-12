@@ -40,9 +40,9 @@ function computeTarget({ sex, weight, height, age, activity, goal }) {
 
 // Recherche dans la base alimentaire gratuite Open Food Facts
 async function searchOpenFoodFacts(query) {
-  const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(
+  const url = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(
     query
-  )}&search_simple=1&action=process&json=1&page_size=8`;
+  )}&page_size=8&fields=product_name,brands,nutriments`;
   let response;
   try {
     response = await fetch(url);
@@ -51,16 +51,18 @@ async function searchOpenFoodFacts(query) {
   }
   if (!response.ok) throw new Error("api_error");
   const data = await response.json();
-  const products = (data.products || [])
+  const hits = data.hits || [];
+  const products = hits
     .filter((p) => p.product_name && p.nutriments && p.nutriments["energy-kcal_100g"])
     .map((p, i) => ({
-      id: `${i}-${p.product_name}-${p.code || i}`,
+      id: `${i}-${p.product_name}`,
       name: p.product_name,
       brand: p.brands ? p.brands.split(",")[0].trim() : "",
       kcalPer100g: Math.round(p.nutriments["energy-kcal_100g"]),
     }));
   return products;
 }
+
 
 
 function Perforation() {
