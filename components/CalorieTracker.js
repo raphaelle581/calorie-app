@@ -37,7 +37,96 @@ function computeTarget({ sex, weight, height, age, activity, goal }) {
   const capped = Math.max(target, floor);
   return { bmr: Math.round(bmr), tdee: Math.round(tdee), target: capped, wasCapped: capped !== target };
 }
-// Recherche dans la base alimentaire gratuite Open Food Facts
+// Aliments génériques courants, vérifiés en premier (rapide et fiable)
+const GENERIC_FOODS = [
+  { name: "Pomme", kcalPer100g: 52 },
+  { name: "Banane", kcalPer100g: 89 },
+  { name: "Orange", kcalPer100g: 47 },
+  { name: "Poire", kcalPer100g: 57 },
+  { name: "Fraise", kcalPer100g: 32 },
+  { name: "Raisin", kcalPer100g: 69 },
+  { name: "Kiwi", kcalPer100g: 61 },
+  { name: "Ananas", kcalPer100g: 50 },
+  { name: "Pastèque", kcalPer100g: 30 },
+  { name: "Melon", kcalPer100g: 34 },
+  { name: "Cerise", kcalPer100g: 63 },
+  { name: "Pêche", kcalPer100g: 39 },
+  { name: "Abricot", kcalPer100g: 48 },
+  { name: "Mangue", kcalPer100g: 60 },
+  { name: "Citron", kcalPer100g: 29 },
+  { name: "Avocat", kcalPer100g: 160 },
+  { name: "Carotte", kcalPer100g: 41 },
+  { name: "Tomate", kcalPer100g: 18 },
+  { name: "Concombre", kcalPer100g: 15 },
+  { name: "Courgette", kcalPer100g: 17 },
+  { name: "Brocoli", kcalPer100g: 34 },
+  { name: "Épinard", kcalPer100g: 23 },
+  { name: "Salade / laitue", kcalPer100g: 15 },
+  { name: "Poivron", kcalPer100g: 20 },
+  { name: "Oignon", kcalPer100g: 40 },
+  { name: "Ail", kcalPer100g: 149 },
+  { name: "Pomme de terre (cuite)", kcalPer100g: 87 },
+  { name: "Champignon", kcalPer100g: 22 },
+  { name: "Haricot vert", kcalPer100g: 31 },
+  { name: "Petit pois", kcalPer100g: 81 },
+  { name: "Aubergine", kcalPer100g: 25 },
+  { name: "Riz blanc (cuit)", kcalPer100g: 130 },
+  { name: "Riz complet (cuit)", kcalPer100g: 111 },
+  { name: "Pâtes (cuites)", kcalPer100g: 131 },
+  { name: "Pain complet", kcalPer100g: 247 },
+  { name: "Pain blanc / baguette", kcalPer100g: 265 },
+  { name: "Quinoa (cuit)", kcalPer100g: 120 },
+  { name: "Semoule (cuite)", kcalPer100g: 112 },
+  { name: "Flocons d'avoine", kcalPer100g: 389 },
+  { name: "Lentilles (cuites)", kcalPer100g: 116 },
+  { name: "Pois chiches (cuits)", kcalPer100g: 164 },
+  { name: "Poulet (blanc, cuit)", kcalPer100g: 165 },
+  { name: "Bœuf haché (cuit)", kcalPer100g: 172 },
+  { name: "Œuf", kcalPer100g: 155 },
+  { name: "Saumon (cuit)", kcalPer100g: 208 },
+  { name: "Thon (nature)", kcalPer100g: 132 },
+  { name: "Jambon blanc", kcalPer100g: 145 },
+  { name: "Dinde (cuite)", kcalPer100g: 189 },
+  { name: "Tofu", kcalPer100g: 76 },
+  { name: "Lait entier", kcalPer100g: 61 },
+  { name: "Lait demi-écrémé", kcalPer100g: 46 },
+  { name: "Yaourt nature", kcalPer100g: 61 },
+  { name: "Fromage blanc 0%", kcalPer100g: 45 },
+  { name: "Fromage blanc 20%", kcalPer100g: 90 },
+  { name: "Emmental", kcalPer100g: 380 },
+  { name: "Camembert", kcalPer100g: 300 },
+  { name: "Beurre", kcalPer100g: 717 },
+  { name: "Crème fraîche", kcalPer100g: 292 },
+  { name: "Jus d'orange", kcalPer100g: 45 },
+  { name: "Café noir", kcalPer100g: 1 },
+  { name: "Thé nature", kcalPer100g: 1 },
+  { name: "Amandes", kcalPer100g: 579 },
+  { name: "Noix", kcalPer100g: 654 },
+  { name: "Cacahuètes", kcalPer100g: 567 },
+  { name: "Chocolat noir", kcalPer100g: 546 },
+  { name: "Chocolat au lait", kcalPer100g: 535 },
+  { name: "Miel", kcalPer100g: 304 },
+  { name: "Sucre", kcalPer100g: 387 },
+  { name: "Huile d'olive", kcalPer100g: 884 },
+];
+
+function normalize(str) {
+  return str
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function searchGenericFoods(query) {
+  const q = normalize(query.trim());
+  return GENERIC_FOODS.filter((f) => normalize(f.name).includes(q)).map((f, i) => ({
+    id: `generic-${i}-${f.name}`,
+    name: f.name,
+    brand: "Aliment générique",
+    kcalPer100g: f.kcalPer100g,
+  }));
+}
+
 async function searchOpenFoodFacts(query) {
   const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(
     query
@@ -61,7 +150,7 @@ async function searchOpenFoodFacts(query) {
     )
     .slice(0, 8)
     .map((p, i) => ({
-      id: `${i}-${p.product_name}`,
+      id: `off-${i}-${p.product_name}`,
       name: p.product_name,
       brand: p.brands ? p.brands.split(",")[0].trim() : "",
       kcalPer100g: Math.round(p.nutriments["energy-kcal_100g"]),
@@ -69,6 +158,12 @@ async function searchOpenFoodFacts(query) {
   return products;
 }
 
+// Cherche d'abord dans la liste générique, sinon dans Open Food Facts
+async function searchFoods(query) {
+  const genericMatches = searchGenericFoods(query);
+  if (genericMatches.length > 0) return genericMatches;
+  return await searchOpenFoodFacts(query);
+}
 
 
 function Perforation() {
