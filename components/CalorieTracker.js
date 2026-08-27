@@ -37,6 +37,7 @@ function computeTarget({ sex, weight, height, age, activity, goal }) {
   const capped = Math.max(target, floor);
   return { bmr: Math.round(bmr), tdee: Math.round(tdee), target: capped, wasCapped: capped !== target };
 }
+
 // Aliments génériques courants, vérifiés en premier (rapide et fiable)
 const GENERIC_FOODS = [
   { name: "Pomme", kcalPer100g: 52 },
@@ -139,14 +140,14 @@ async function searchOpenFoodFacts(query) {
   }
   if (!response.ok) throw new Error("api_error");
   const data = await response.json();
-  const queryLower = query.trim().toLowerCase();
+  const queryNorm = normalize(query.trim());
   const products = (data.products || [])
     .filter(
       (p) =>
         p.product_name &&
         p.nutriments &&
-        p.nutriments["energy-kcal_100g"] &&
-        p.product_name.toLowerCase().includes(queryLower)
+        typeof p.nutriments["energy-kcal_100g"] === "number" &&
+        normalize(p.product_name).includes(queryNorm)
     )
     .slice(0, 8)
     .map((p, i) => ({
@@ -164,7 +165,6 @@ async function searchFoods(query) {
   if (genericMatches.length > 0) return genericMatches;
   return await searchOpenFoodFacts(query);
 }
-
 
 function Perforation() {
   return (
@@ -512,7 +512,7 @@ function FoodSearchForm({ addFood }) {
     setResults([]);
     setSelected(null);
     try {
-      const products = await searchOpenFoodFacts(query.trim());
+      const products = await searchFoods(query.trim());
       if (products.length === 0) {
         setSearchError("Aucun résultat trouvé, essaie un autre nom.");
       }
@@ -625,7 +625,7 @@ function FoodSearchForm({ addFood }) {
       )}
 
       <p className="text-[11px]" style={{ color: "#9B9682" }}>
-        Recherche dans Open Food Facts, une base alimentaire libre et gratuite.
+        Recherche d'abord dans notre liste d'aliments courants, puis dans Open Food Facts si besoin.
       </p>
     </div>
   );
