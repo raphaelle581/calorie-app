@@ -260,7 +260,7 @@ export default function CalorieTracker() {
     goal: "maintain",
   });
   const [foods, setFoods] = useState([]);
-  const [loadError, setLoadError] = useState("");
+  const [loadError, setLoadError] = useState({ text: "", detail: "" });
   const [profileError, setProfileError] = useState("");
   const [now] = useState(() => new Date());
   const todayKey = dateKey(now);
@@ -277,7 +277,7 @@ export default function CalorieTracker() {
     if (!session) return;
     (async () => {
       setStep("loading");
-      setLoadError("");
+      setLoadError({ text: "", detail: "" });
       const { data: profileData, error: profileErr } = await supabase
         .from("profiles")
         .select("*")
@@ -292,8 +292,14 @@ export default function CalorieTracker() {
         .order("created_at", { ascending: true });
 
       if (profileErr || logsErr) {
-        console.error("Erreur de chargement :", profileErr || logsErr);
-        setLoadError("Impossible de charger tes données. Vérifie ta connexion puis recharge la page.");
+        const err = profileErr || logsErr;
+        console.error("Erreur de chargement :", err);
+        // Détail technique affiché en petit : utile pour savoir quoi corriger côté Supabase
+        const table = profileErr ? "profiles" : "logs";
+        setLoadError({
+          text: "Impossible de charger tes données. Vérifie ta connexion puis recharge la page.",
+          detail: `[${table}] ${err.code ? err.code + " — " : ""}${err.message || "erreur inconnue"}`,
+        });
         setStep("error");
         return;
       }
@@ -389,10 +395,18 @@ export default function CalorieTracker() {
         )}
         {step === "error" && (
           <div className="text-center py-20 text-sm space-y-3" style={{ color: "#B0532E" }}>
-            <p>{loadError}</p>
-            <button onClick={() => window.location.reload()} className="underline" style={{ color: "#3F5B48" }}>
-              Recharger
-            </button>
+            <p>{loadError.text}</p>
+            {loadError.detail && (
+              <p className="font-mono-num text-[11px] break-words" style={{ color: "#8A8672" }}>{loadError.detail}</p>
+            )}
+            <div className="flex justify-center gap-5">
+              <button onClick={() => window.location.reload()} className="underline" style={{ color: "#3F5B48" }}>
+                Recharger
+              </button>
+              <button onClick={handleSignOut} className="underline" style={{ color: "#5C6659" }}>
+                Se déconnecter
+              </button>
+            </div>
           </div>
         )}
         {step === "setup" && (
