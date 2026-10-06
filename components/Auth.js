@@ -4,6 +4,38 @@ import React, { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Flame, Loader2 } from "lucide-react";
 
+// Traduit les erreurs techniques (souvent en anglais) en messages compréhensibles
+function friendlyError(err) {
+  const msg = (err && err.message) || "";
+  // "Load failed" (Safari/iPad), "Failed to fetch" (Chrome), "NetworkError" (Firefox) :
+  // le navigateur n'a pas réussi à joindre Supabase du tout.
+  if (/load failed|failed to fetch|networkerror|network request failed/i.test(msg)) {
+    return "Impossible de joindre le serveur. Vérifie ta connexion internet. Si elle marche, le projet Supabase est peut-être en pause (il faut le réactiver depuis supabase.com).";
+  }
+  if (/already registered|already been registered/i.test(msg)) {
+    return "Un compte existe déjà avec cette adresse. Essaie plutôt de te connecter.";
+  }
+  if (/invalid login credentials/i.test(msg)) {
+    return "Email ou mot de passe incorrect.";
+  }
+  if (/email not confirmed/i.test(msg)) {
+    return "Ton adresse email n'est pas encore confirmée : clique sur le lien reçu par mail.";
+  }
+  if (/rate limit|too many requests|security purposes/i.test(msg)) {
+    return "Trop de tentatives d'affilée. Patiente quelques minutes avant de réessayer.";
+  }
+  if (/password should be at least/i.test(msg)) {
+    return "Le mot de passe est trop court (6 caractères minimum).";
+  }
+  if (/signups? not allowed|email signups are disabled|provider is not enabled/i.test(msg)) {
+    return "Les inscriptions par email sont désactivées sur le serveur (Supabase → Authentication → Providers → Email).";
+  }
+  if (/invalid email|unable to validate email/i.test(msg)) {
+    return "Cette adresse email n'est pas valide.";
+  }
+  return msg || "Une erreur est survenue.";
+}
+
 export default function Auth() {
   const [mode, setMode] = useState("signin"); // signin | signup
   const [email, setEmail] = useState("");
@@ -19,8 +51,16 @@ export default function Auth() {
     setInfo("");
     try {
       if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          // Le lien de confirmation reçu par mail ramène sur le site actuel
+          // (StackBlitz, localhost ou Vercel) au lieu de l'URL par défaut de Supabase.
+          options: { emailRedirectTo: window.location.origin },
+        });
         if (error) throw error;
+        // Si la confirmation par email est désactivée, l'utilisateur est connecté directement.
+        if (data.session) return;
         setInfo("Compte créé ! Vérifie ta boîte mail pour confirmer, puis connecte-toi.");
         setMode("signin");
       } else {
@@ -28,7 +68,8 @@ export default function Auth() {
         if (error) throw error;
       }
     } catch (err) {
-      setError(err.message || "Une erreur est survenue.");
+      console.error("Erreur d'authentification :", err);
+      setError(friendlyError(err));
     } finally {
       setLoading(false);
     }
